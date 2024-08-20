@@ -5,6 +5,7 @@ from ...utils import (
     OptionalDependencyNotAvailable,
     _LazyModule,
     get_objects_from_module,
+    is_flax_available,
     is_torch_available,
     is_transformers_available,
 )
@@ -21,10 +22,8 @@ except OptionalDependencyNotAvailable:
 
     _dummy_objects.update(get_objects_from_module(dummy_torch_and_transformers_objects))
 else:
-    _import_structure["pipeline_leditspp_stable_diffusion"] = ["LEditsPPPipelineStableDiffusion"]
-    _import_structure["pipeline_leditspp_stable_diffusion_xl"] = ["LEditsPPPipelineStableDiffusionXL"]
-
-    _import_structure["pipeline_output"] = ["LEditsPPDiffusionPipelineOutput", "LEditsPPDiffusionPipelineOutput"]
+    _import_structure["pipeline_brushnet"] = ["StableDiffusionBrushNetPipeline"]
+    _import_structure["pipeline_brushnet_sd_xl"] = ["StableDiffusionXLBrushNetPipeline"]
 
 if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
     try:
@@ -34,12 +33,8 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
     except OptionalDependencyNotAvailable:
         from ...utils.dummy_torch_and_transformers_objects import *
     else:
-        from .pipeline_leditspp_stable_diffusion import (
-            LEditsPPDiffusionPipelineOutput,
-            LEditsPPInversionPipelineOutput,
-            LEditsPPPipelineStableDiffusion,
-        )
-        from .pipeline_leditspp_stable_diffusion_xl import LEditsPPPipelineStableDiffusionXL
+        from .pipeline_brushnet import StableDiffusionBrushNetPipeline
+        from .pipeline_brushnet_sd_xl import StableDiffusionXLBrushNetPipeline
 
 else:
     import sys
@@ -50,6 +45,5 @@ else:
         _import_structure,
         module_spec=__spec__,
     )
-
     for name, value in _dummy_objects.items():
         setattr(sys.modules[__name__], name, value)

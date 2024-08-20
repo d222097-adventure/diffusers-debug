@@ -18,9 +18,10 @@ import numpy as np
 import torch
 from torch import nn
 
-from ..utils import deprecate
+from ..utils import USE_PEFT_BACKEND, deprecate
 from .activations import get_activation
 from .attention_processor import Attention
+from .lora import LoRACompatibleLinear
 
 
 def get_timestep_embedding(
@@ -199,7 +200,7 @@ class TimestepEmbedding(nn.Module):
         sample_proj_bias=True,
     ):
         super().__init__()
-        linear_cls = nn.Linear
+        linear_cls = nn.Linear if USE_PEFT_BACKEND else LoRACompatibleLinear
 
         self.linear_1 = linear_cls(in_channels, time_embed_dim, sample_proj_bias)
 

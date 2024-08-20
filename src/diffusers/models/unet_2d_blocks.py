@@ -175,6 +175,18 @@ def get_mid_block(
             resnet_time_scale_shift=resnet_time_scale_shift,
             add_attention=False,
         )
+    elif mid_block_type == "MidBlock2D":
+        return MidBlock2D(
+            in_channels=in_channels,
+            temb_channels=temb_channels,
+            dropout=dropout,
+            resnet_eps=resnet_eps,
+            resnet_act_fn=resnet_act_fn,
+            output_scale_factor=output_scale_factor,
+            resnet_time_scale_shift=resnet_time_scale_shift,
+            resnet_groups=resnet_groups,
+            use_linear_projection=use_linear_projection,
+        )
     elif mid_block_type is None:
         return None
     else:
@@ -263,6 +275,9 @@ class UNetMidBlock2DSimpleCrossAttn(UNetMidBlock2DSimpleCrossAttn):
     deprecation_message = "Importing `UNetMidBlock2DSimpleCrossAttn` from `diffusers.models.unet_2d_blocks` is deprecated and this will be removed in a future version. Please use `from diffusers.models.unets.unet_2d_blocks import UNetMidBlock2DSimpleCrossAttn`, instead."
     deprecate("UNetMidBlock2DSimpleCrossAttn", "0.29", deprecation_message)
 
+class MidBlock2D(MidBlock2D):
+    deprecation_message = "Importing `MidBlock2D` from `diffusers.models.unet_2d_blocks` is deprecated and this will be removed in a future version. Please use `from diffusers.models.unets.unet_2d_blocks import MidBlock2D`, instead."
+    deprecate("MidBlock2D", "0.29", deprecation_message)
 
 class AttnDownBlock2D(AttnDownBlock2D):
     deprecation_message = "Importing `AttnDownBlock2D` from `diffusers.models.unet_2d_blocks` is deprecated and this will be removed in a future version. Please use `from diffusers.models.unets.unet_2d_blocks import AttnDownBlock2D`, instead."

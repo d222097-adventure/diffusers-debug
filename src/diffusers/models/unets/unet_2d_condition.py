@@ -80,7 +80,7 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin,
         in_channels (`int`, *optional*, defaults to 4): Number of channels in the input sample.
         out_channels (`int`, *optional*, defaults to 4): Number of channels in the output.
         center_input_sample (`bool`, *optional*, defaults to `False`): Whether to center the input sample.
-        flip_sin_to_cos (`bool`, *optional*, defaults to `True`):
+        flip_sin_to_cos (`bool`, *optional*, defaults to `False`):
             Whether to flip the sin to cos in the time embedding.
         freq_shift (`int`, *optional*, defaults to 0): The frequency shift to apply to the time embedding.
         down_block_types (`Tuple[str]`, *optional*, defaults to `("CrossAttnDownBlock2D", "CrossAttnDownBlock2D", "CrossAttnDownBlock2D", "DownBlock2D")`):
@@ -109,7 +109,7 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin,
             The number of transformer blocks of type [`~models.attention.BasicTransformerBlock`]. Only relevant for
             [`~models.unet_2d_blocks.CrossAttnDownBlock2D`], [`~models.unet_2d_blocks.CrossAttnUpBlock2D`],
             [`~models.unet_2d_blocks.UNetMidBlock2DCrossAttn`].
-        reverse_transformer_layers_per_block : (`Tuple[Tuple]`, *optional*, defaults to None):
+       reverse_transformer_layers_per_block : (`Tuple[Tuple]`, *optional*, defaults to None):
             The number of transformer blocks of type [`~models.attention.BasicTransformerBlock`], in the upsampling
             blocks of the U-Net. Only relevant if `transformer_layers_per_block` is of type `Tuple[Tuple]` and for
             [`~models.unet_2d_blocks.CrossAttnDownBlock2D`], [`~models.unet_2d_blocks.CrossAttnUpBlock2D`],
@@ -147,9 +147,9 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin,
             The second activation function to use in timestep embedding. Choose from `silu`, `mish` and `gelu`.
         time_cond_proj_dim (`int`, *optional*, defaults to `None`):
             The dimension of `cond_proj` layer in the timestep embedding.
-        conv_in_kernel (`int`, *optional*, default to `3`): The kernel size of `conv_in` layer.
-        conv_out_kernel (`int`, *optional*, default to `3`): The kernel size of `conv_out` layer.
-        projection_class_embeddings_input_dim (`int`, *optional*): The dimension of the `class_labels` input when
+        conv_in_kernel (`int`, *optional*, default to `3`): The kernel size of `conv_in` layer. conv_out_kernel (`int`,
+        *optional*, default to `3`): The kernel size of `conv_out` layer. projection_class_embeddings_input_dim (`int`,
+        *optional*): The dimension of the `class_labels` input when
             `class_embed_type="projection"`. Required when `class_embed_type="projection"`.
         class_embeddings_concat (`bool`, *optional*, defaults to `False`): Whether to concatenate the time
             embeddings with the class embeddings.
@@ -1051,6 +1051,9 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin,
         down_intrablock_additional_residuals: Optional[Tuple[torch.Tensor]] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
         return_dict: bool = True,
+        down_block_add_samples: Optional[Tuple[torch.Tensor]] = None,
+        mid_block_add_sample: Optional[Tuple[torch.Tensor]] = None,
+        up_block_add_samples: Optional[Tuple[torch.Tensor]] = None,
     ) -> Union[UNet2DConditionOutput, Tuple]:
         r"""
         The [`UNet2DConditionModel`] forward method.
@@ -1196,6 +1199,7 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin,
         # maintain backward compatibility for legacy usage, where
         #       T2I-Adapter and ControlNet both use down_block_additional_residuals arg
         #       but can only use one or the other
+        is_brushnet = down_block_add_samples is not None and mid_block_add_sample is not None and up_block_add_samples is not None
         if not is_adapter and mid_block_additional_residual is None and down_block_additional_residuals is not None:
             deprecate(
                 "T2I should not use down_block_additional_residuals",
@@ -1209,12 +1213,20 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin,
             is_adapter = True
 
         down_block_res_samples = (sample,)
+
+        if is_brushnet:
+            sample = sample + down_block_add_samples.pop(0)
+
         for downsample_block in self.down_blocks:
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
                 # For t2i-adapter CrossAttnDownBlock2D
                 additional_residuals = {}
                 if is_adapter and len(down_intrablock_additional_residuals) > 0:
                     additional_residuals["additional_residuals"] = down_intrablock_additional_residuals.pop(0)
+
+                if is_brushnet and len(down_block_add_samples)>0:
+                    additional_residuals["down_block_add_samples"] = [down_block_add_samples.pop(0) 
+                                                        for _ in range(len(downsample_block.resnets)+(downsample_block.downsamplers !=None))]
 
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
@@ -1226,7 +1238,12 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin,
                     **additional_residuals,
                 )
             else:
-                sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
+                additional_residuals = {}
+                if is_brushnet and len(down_block_add_samples)>0:
+                    additional_residuals["down_block_add_samples"] = [down_block_add_samples.pop(0) 
+                                                        for _ in range(len(downsample_block.resnets)+(downsample_block.downsamplers !=None))]
+
+                sample, res_samples = downsample_block(hidden_states=sample, temb=emb, scale=lora_scale, **additional_residuals)
                 if is_adapter and len(down_intrablock_additional_residuals) > 0:
                     sample += down_intrablock_additional_residuals.pop(0)
 
@@ -1268,6 +1285,9 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin,
         if is_controlnet:
             sample = sample + mid_block_additional_residual
 
+        if is_brushnet:
+            sample = sample + mid_block_add_sample
+
         # 5. up
         for i, upsample_block in enumerate(self.up_blocks):
             is_final_block = i == len(self.up_blocks) - 1
@@ -1281,6 +1301,11 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin,
                 upsample_size = down_block_res_samples[-1].shape[2:]
 
             if hasattr(upsample_block, "has_cross_attention") and upsample_block.has_cross_attention:
+                additional_residuals = {}
+                if is_brushnet and len(up_block_add_samples)>0:
+                    additional_residuals["up_block_add_samples"] = [up_block_add_samples.pop(0) 
+                                                        for _ in range(len(upsample_block.resnets)+(upsample_block.upsamplers !=None))]
+                
                 sample = upsample_block(
                     hidden_states=sample,
                     temb=emb,
@@ -1290,13 +1315,21 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin,
                     upsample_size=upsample_size,
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
+                    **additional_residuals,
                 )
             else:
+                additional_residuals = {}
+                if is_brushnet and len(up_block_add_samples)>0:
+                    additional_residuals["up_block_add_samples"] = [up_block_add_samples.pop(0) 
+                                                        for _ in range(len(upsample_block.resnets)+(upsample_block.upsamplers !=None))]
+                
                 sample = upsample_block(
                     hidden_states=sample,
                     temb=emb,
                     res_hidden_states_tuple=res_samples,
                     upsample_size=upsample_size,
+                    scale=lora_scale,
+                    **additional_residuals,
                 )
 
         # 6. post-process

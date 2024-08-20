@@ -28,8 +28,9 @@ from ...models.attention_processor import (
     AttnAddedKVProcessor,
     AttnProcessor,
 )
+from ...models.lora import LoRACompatibleConv, LoRACompatibleLinear
 from ...models.modeling_utils import ModelMixin
-from ...utils import is_torch_version
+from ...utils import USE_PEFT_BACKEND, is_torch_version
 from .modeling_wuerstchen_common import AttnBlock, ResBlock, TimestepBlock, WuerstchenLayerNorm
 
 
@@ -40,8 +41,8 @@ class WuerstchenPrior(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin, Peft
     @register_to_config
     def __init__(self, c_in=16, c=1280, c_cond=1024, c_r=64, depth=16, nhead=16, dropout=0.1):
         super().__init__()
-        conv_cls = nn.Conv2d
-        linear_cls = nn.Linear
+        conv_cls = nn.Conv2d if USE_PEFT_BACKEND else LoRACompatibleConv
+        linear_cls = nn.Linear if USE_PEFT_BACKEND else LoRACompatibleLinear
 
         self.c_r = c_r
         self.projection = conv_cls(c_in, c, kernel_size=1)

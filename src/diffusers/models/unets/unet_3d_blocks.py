@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 import torch
 from torch import nn
 
-from ...utils import deprecate, is_torch_version, logging
+from ...utils import is_torch_version
 from ...utils.torch_utils import apply_freeu
 from ..attention import Attention
 from ..resnet import (
@@ -33,9 +33,6 @@ from ..transformers.transformer_temporal import (
     TransformerSpatioTemporalModel,
     TransformerTemporalModel,
 )
-
-
-logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
 def get_down_block(
@@ -1008,14 +1005,9 @@ class DownBlockMotion(nn.Module):
         self,
         hidden_states: torch.FloatTensor,
         temb: Optional[torch.FloatTensor] = None,
+        scale: float = 1.0,
         num_frames: int = 1,
-        *args,
-        **kwargs,
     ) -> Union[torch.FloatTensor, Tuple[torch.FloatTensor, ...]]:
-        if len(args) > 0 or kwargs.get("scale", None) is not None:
-            deprecation_message = "The `scale` argument is deprecated and will be ignored. Please remove it, as passing it will raise an error in the future. `scale` should directly be passed while calling the underlying pipeline component i.e., via `cross_attention_kwargs`."
-            deprecate("scale", "1.0.0", deprecation_message)
-
         output_states = ()
 
         blocks = zip(self.resnets, self.motion_modules)
@@ -1037,18 +1029,18 @@ class DownBlockMotion(nn.Module):
                     )
                 else:
                     hidden_states = torch.utils.checkpoint.checkpoint(
-                        create_custom_forward(resnet), hidden_states, temb
+                        create_custom_forward(resnet), hidden_states, temb, scale
                     )
 
             else:
-                hidden_states = resnet(hidden_states, temb)
+                hidden_states = resnet(hidden_states, temb, scale=scale)
             hidden_states = motion_module(hidden_states, num_frames=num_frames)[0]
 
             output_states = output_states + (hidden_states,)
 
         if self.downsamplers is not None:
             for downsampler in self.downsamplers:
-                hidden_states = downsampler(hidden_states)
+                hidden_states = downsampler(hidden_states, scale=scale)
 
             output_states = output_states + (hidden_states,)
 
@@ -1181,11 +1173,9 @@ class CrossAttnDownBlockMotion(nn.Module):
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         additional_residuals: Optional[torch.FloatTensor] = None,
     ):
-        if cross_attention_kwargs is not None:
-            if cross_attention_kwargs.get("scale", None) is not None:
-                logger.warning("Passing `scale` to `cross_attention_kwargs` is depcrecated. `scale` will be ignored.")
-
         output_states = ()
+
+        lora_scale = cross_attention_kwargs.get("scale", 1.0) if cross_attention_kwargs is not None else 1.0
 
         blocks = list(zip(self.resnets, self.attentions, self.motion_modules))
         for i, (resnet, attn, motion_module) in enumerate(blocks):
@@ -1216,7 +1206,7 @@ class CrossAttnDownBlockMotion(nn.Module):
                     return_dict=False,
                 )[0]
             else:
-                hidden_states = resnet(hidden_states, temb)
+                hidden_states = resnet(hidden_states, temb, scale=lora_scale)
                 hidden_states = attn(
                     hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
@@ -1238,7 +1228,7 @@ class CrossAttnDownBlockMotion(nn.Module):
 
         if self.downsamplers is not None:
             for downsampler in self.downsamplers:
-                hidden_states = downsampler(hidden_states)
+                hidden_states = downsampler(hidden_states, scale=lora_scale)
 
             output_states = output_states + (hidden_states,)
 
@@ -1365,10 +1355,7 @@ class CrossAttnUpBlockMotion(nn.Module):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         num_frames: int = 1,
     ) -> torch.FloatTensor:
-        if cross_attention_kwargs is not None:
-            if cross_attention_kwargs.get("scale", None) is not None:
-                logger.warning("Passing `scale` to `cross_attention_kwargs` is depcrecated. `scale` will be ignored.")
-
+        lora_scale = cross_attention_kwargs.get("scale", 1.0) if cross_attention_kwargs is not None else 1.0
         is_freeu_enabled = (
             getattr(self, "s1", None)
             and getattr(self, "s2", None)
@@ -1423,7 +1410,7 @@ class CrossAttnUpBlockMotion(nn.Module):
                     return_dict=False,
                 )[0]
             else:
-                hidden_states = resnet(hidden_states, temb)
+                hidden_states = resnet(hidden_states, temb, scale=lora_scale)
                 hidden_states = attn(
                     hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
@@ -1439,7 +1426,7 @@ class CrossAttnUpBlockMotion(nn.Module):
 
         if self.upsamplers is not None:
             for upsampler in self.upsamplers:
-                hidden_states = upsampler(hidden_states, upsample_size)
+                hidden_states = upsampler(hidden_states, upsample_size, scale=lora_scale)
 
         return hidden_states
 
@@ -1520,14 +1507,9 @@ class UpBlockMotion(nn.Module):
         res_hidden_states_tuple: Tuple[torch.FloatTensor, ...],
         temb: Optional[torch.FloatTensor] = None,
         upsample_size=None,
+        scale: float = 1.0,
         num_frames: int = 1,
-        *args,
-        **kwargs,
     ) -> torch.FloatTensor:
-        if len(args) > 0 or kwargs.get("scale", None) is not None:
-            deprecation_message = "The `scale` argument is deprecated and will be ignored. Please remove it, as passing it will raise an error in the future. `scale` should directly be passed while calling the underlying pipeline component i.e., via `cross_attention_kwargs`."
-            deprecate("scale", "1.0.0", deprecation_message)
-
         is_freeu_enabled = (
             getattr(self, "s1", None)
             and getattr(self, "s2", None)
@@ -1577,12 +1559,12 @@ class UpBlockMotion(nn.Module):
                     )
 
             else:
-                hidden_states = resnet(hidden_states, temb)
+                hidden_states = resnet(hidden_states, temb, scale=scale)
             hidden_states = motion_module(hidden_states, num_frames=num_frames)[0]
 
         if self.upsamplers is not None:
             for upsampler in self.upsamplers:
-                hidden_states = upsampler(hidden_states, upsample_size)
+                hidden_states = upsampler(hidden_states, upsample_size, scale=scale)
 
         return hidden_states
 
@@ -1705,11 +1687,8 @@ class UNetMidBlockCrossAttnMotion(nn.Module):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         num_frames: int = 1,
     ) -> torch.FloatTensor:
-        if cross_attention_kwargs is not None:
-            if cross_attention_kwargs.get("scale", None) is not None:
-                logger.warning("Passing `scale` to `cross_attention_kwargs` is depcrecated. `scale` will be ignored.")
-
-        hidden_states = self.resnets[0](hidden_states, temb)
+        lora_scale = cross_attention_kwargs.get("scale", 1.0) if cross_attention_kwargs is not None else 1.0
+        hidden_states = self.resnets[0](hidden_states, temb, scale=lora_scale)
 
         blocks = zip(self.attentions, self.resnets[1:], self.motion_modules)
         for attn, resnet, motion_module in blocks:
@@ -1758,7 +1737,7 @@ class UNetMidBlockCrossAttnMotion(nn.Module):
                     hidden_states,
                     num_frames=num_frames,
                 )[0]
-                hidden_states = resnet(hidden_states, temb)
+                hidden_states = resnet(hidden_states, temb, scale=lora_scale)
 
         return hidden_states
 

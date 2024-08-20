@@ -134,7 +134,9 @@ class DPMSolverMultistepInverseScheduler(SchedulerMixin, ConfigMixin):
             The way the timesteps should be scaled. Refer to Table 2 of the [Common Diffusion Noise Schedules and
             Sample Steps are Flawed](https://huggingface.co/papers/2305.08891) for more information.
         steps_offset (`int`, defaults to 0):
-            An offset added to the inference steps, as required by some model families.
+            An offset added to the inference steps. You can use a combination of `offset=1` and
+            `set_alpha_to_one=False` to make the last step use step 0 for the previous alpha product like in Stable
+            Diffusion.
     """
 
     _compatibles = [e.name for e in KarrasDiffusionSchedulers]
@@ -790,7 +792,6 @@ class DPMSolverMultistepInverseScheduler(SchedulerMixin, ConfigMixin):
         timestep: int,
         sample: torch.FloatTensor,
         generator=None,
-        variance_noise: Optional[torch.FloatTensor] = None,
         return_dict: bool = True,
     ) -> Union[SchedulerOutput, Tuple]:
         """
@@ -806,9 +807,6 @@ class DPMSolverMultistepInverseScheduler(SchedulerMixin, ConfigMixin):
                 A current instance of a sample created by the diffusion process.
             generator (`torch.Generator`, *optional*):
                 A random number generator.
-            variance_noise (`torch.FloatTensor`):
-                Alternative to generating noise with `generator` by directly providing the noise for the variance
-                itself. Useful for methods such as [`CycleDiffusion`].
             return_dict (`bool`):
                 Whether or not to return a [`~schedulers.scheduling_utils.SchedulerOutput`] or `tuple`.
 
@@ -839,12 +837,10 @@ class DPMSolverMultistepInverseScheduler(SchedulerMixin, ConfigMixin):
             self.model_outputs[i] = self.model_outputs[i + 1]
         self.model_outputs[-1] = model_output
 
-        if self.config.algorithm_type in ["sde-dpmsolver", "sde-dpmsolver++"] and variance_noise is None:
+        if self.config.algorithm_type in ["sde-dpmsolver", "sde-dpmsolver++"]:
             noise = randn_tensor(
                 model_output.shape, generator=generator, device=model_output.device, dtype=model_output.dtype
             )
-        elif self.config.algorithm_type in ["sde-dpmsolver", "sde-dpmsolver++"]:
-            noise = variance_noise
         else:
             noise = None
 

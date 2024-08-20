@@ -1,4 +1,4 @@
-__version__ = "0.27.0"
+__version__ = "0.27.0.dev0"
 
 from typing import TYPE_CHECKING
 
@@ -79,6 +79,7 @@ else:
             "AutoencoderKLTemporalDecoder",
             "AutoencoderTiny",
             "ConsistencyDecoderVAE",
+            "BrushNetModel",
             "ControlNetModel",
             "I2VGenXLUNet",
             "Kandinsky3UNet",
@@ -253,8 +254,6 @@ else:
             "LatentConsistencyModelImg2ImgPipeline",
             "LatentConsistencyModelPipeline",
             "LDMTextToImagePipeline",
-            "LEditsPPPipelineStableDiffusion",
-            "LEditsPPPipelineStableDiffusionXL",
             "MusicLDMPipeline",
             "PaintByExamplePipeline",
             "PIAPipeline",
@@ -267,6 +266,7 @@ else:
             "StableCascadePriorPipeline",
             "StableDiffusionAdapterPipeline",
             "StableDiffusionAttendAndExcitePipeline",
+            "StableDiffusionBrushNetPipeline",
             "StableDiffusionControlNetImg2ImgPipeline",
             "StableDiffusionControlNetInpaintPipeline",
             "StableDiffusionControlNetPipeline",
@@ -290,6 +290,7 @@ else:
             "StableDiffusionSAGPipeline",
             "StableDiffusionUpscalePipeline",
             "StableDiffusionXLAdapterPipeline",
+            "StableDiffusionXLBrushNetPipeline",
             "StableDiffusionXLControlNetImg2ImgPipeline",
             "StableDiffusionXLControlNetInpaintPipeline",
             "StableDiffusionXLControlNetPipeline",
@@ -473,6 +474,7 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             AutoencoderKLTemporalDecoder,
             AutoencoderTiny,
             ConsistencyDecoderVAE,
+            BrushNetModel,
             ControlNetModel,
             I2VGenXLUNet,
             Kandinsky3UNet,
@@ -625,8 +627,6 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             LatentConsistencyModelImg2ImgPipeline,
             LatentConsistencyModelPipeline,
             LDMTextToImagePipeline,
-            LEditsPPPipelineStableDiffusion,
-            LEditsPPPipelineStableDiffusionXL,
             MusicLDMPipeline,
             PaintByExamplePipeline,
             PIAPipeline,
@@ -639,6 +639,7 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             StableCascadePriorPipeline,
             StableDiffusionAdapterPipeline,
             StableDiffusionAttendAndExcitePipeline,
+            StableDiffusionBrushNetPipeline,
             StableDiffusionControlNetImg2ImgPipeline,
             StableDiffusionControlNetInpaintPipeline,
             StableDiffusionControlNetPipeline,
@@ -662,6 +663,7 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             StableDiffusionSAGPipeline,
             StableDiffusionUpscalePipeline,
             StableDiffusionXLAdapterPipeline,
+            StableDiffusionXLBrushNetPipeline,
             StableDiffusionXLControlNetImg2ImgPipeline,
             StableDiffusionXLControlNetInpaintPipeline,
             StableDiffusionXLControlNetPipeline,
