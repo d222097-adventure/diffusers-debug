@@ -63,8 +63,7 @@ class ConsistencyDecoderVAE(ModelMixin, ConfigMixin):
         ...     "runwayml/stable-diffusion-v1-5", vae=vae, torch_dtype=torch.float16
         ... ).to("cuda")
 
-        >>> image = pipe("horse", generator=torch.manual_seed(0)).images[0]
-        >>> image
+        >>> pipe("horse", generator=torch.manual_seed(0)).images
         ```
     """
 
@@ -73,7 +72,6 @@ class ConsistencyDecoderVAE(ModelMixin, ConfigMixin):
         self,
         scaling_factor: float = 0.18215,
         latent_channels: int = 4,
-        sample_size: int = 32,
         encoder_act_fn: str = "silu",
         encoder_block_out_channels: Tuple[int, ...] = (128, 256, 512, 512),
         encoder_double_z: bool = True,
@@ -155,16 +153,6 @@ class ConsistencyDecoderVAE(ModelMixin, ConfigMixin):
         self.use_slicing = False
         self.use_tiling = False
 
-        # only relevant if vae tiling is enabled
-        self.tile_sample_min_size = self.config.sample_size
-        sample_size = (
-            self.config.sample_size[0]
-            if isinstance(self.config.sample_size, (list, tuple))
-            else self.config.sample_size
-        )
-        self.tile_latent_min_size = int(sample_size / (2 ** (len(self.config.block_out_channels) - 1)))
-        self.tile_overlap_factor = 0.25
-
     # Copied from diffusers.models.autoencoders.autoencoder_kl.AutoencoderKL.enable_tiling
     def enable_tiling(self, use_tiling: bool = True):
         r"""
@@ -211,7 +199,7 @@ class ConsistencyDecoderVAE(ModelMixin, ConfigMixin):
 
         def fn_recursive_add_processors(name: str, module: torch.nn.Module, processors: Dict[str, AttentionProcessor]):
             if hasattr(module, "get_processor"):
-                processors[f"{name}.processor"] = module.get_processor()
+                processors[f"{name}.processor"] = module.get_processor(return_deprecated_lora=True)
 
             for sub_name, child in module.named_children():
                 fn_recursive_add_processors(f"{name}.{sub_name}", child, processors)
@@ -276,21 +264,21 @@ class ConsistencyDecoderVAE(ModelMixin, ConfigMixin):
 
     @apply_forward_hook
     def encode(
-        self, x: torch.Tensor, return_dict: bool = True
+        self, x: torch.FloatTensor, return_dict: bool = True
     ) -> Union[ConsistencyDecoderVAEOutput, Tuple[DiagonalGaussianDistribution]]:
         """
         Encode a batch of images into latents.
 
         Args:
-            x (`torch.Tensor`): Input batch of images.
+            x (`torch.FloatTensor`): Input batch of images.
             return_dict (`bool`, *optional*, defaults to `True`):
-                Whether to return a [`~models.autoencoders.consistency_decoder_vae.ConsistencyDecoderVAEOutput`]
-                instead of a plain tuple.
+                Whether to return a [`~models.consistecy_decoder_vae.ConsistencyDecoderOoutput`] instead of a plain
+                tuple.
 
         Returns:
                 The latent representations of the encoded images. If `return_dict` is True, a
-                [`~models.autoencoders.consistency_decoder_vae.ConsistencyDecoderVAEOutput`] is returned, otherwise a
-                plain `tuple` is returned.
+                [`~models.consistency_decoder_vae.ConsistencyDecoderVAEOutput`] is returned, otherwise a plain `tuple`
+                is returned.
         """
         if self.use_tiling and (x.shape[-1] > self.tile_sample_min_size or x.shape[-2] > self.tile_sample_min_size):
             return self.tiled_encode(x, return_dict=return_dict)
@@ -312,24 +300,11 @@ class ConsistencyDecoderVAE(ModelMixin, ConfigMixin):
     @apply_forward_hook
     def decode(
         self,
-        z: torch.Tensor,
+        z: torch.FloatTensor,
         generator: Optional[torch.Generator] = None,
         return_dict: bool = True,
         num_inference_steps: int = 2,
-    ) -> Union[DecoderOutput, Tuple[torch.Tensor]]:
-        """
-        Decodes the input latent vector `z` using the consistency decoder VAE model.
-
-        Args:
-            z (torch.Tensor): The input latent vector.
-            generator (Optional[torch.Generator]): The random number generator. Default is None.
-            return_dict (bool): Whether to return the output as a dictionary. Default is True.
-            num_inference_steps (int): The number of inference steps. Default is 2.
-
-        Returns:
-            Union[DecoderOutput, Tuple[torch.Tensor]]: The decoded output.
-
-        """
+    ) -> Union[DecoderOutput, Tuple[torch.FloatTensor]]:
         z = (z * self.config.scaling_factor - self.means) / self.stds
 
         scale_factor = 2 ** (len(self.config.block_out_channels) - 1)
@@ -370,7 +345,7 @@ class ConsistencyDecoderVAE(ModelMixin, ConfigMixin):
             b[:, :, :, x] = a[:, :, :, -blend_extent + x] * (1 - x / blend_extent) + b[:, :, :, x] * (x / blend_extent)
         return b
 
-    def tiled_encode(self, x: torch.Tensor, return_dict: bool = True) -> Union[ConsistencyDecoderVAEOutput, Tuple]:
+    def tiled_encode(self, x: torch.FloatTensor, return_dict: bool = True) -> ConsistencyDecoderVAEOutput:
         r"""Encode a batch of images using a tiled encoder.
 
         When this option is enabled, the VAE will split the input tensor into tiles to compute encoding in several
@@ -380,15 +355,15 @@ class ConsistencyDecoderVAE(ModelMixin, ConfigMixin):
         output, but they should be much less noticeable.
 
         Args:
-            x (`torch.Tensor`): Input batch of images.
+            x (`torch.FloatTensor`): Input batch of images.
             return_dict (`bool`, *optional*, defaults to `True`):
-                Whether or not to return a [`~models.autoencoders.consistency_decoder_vae.ConsistencyDecoderVAEOutput`]
-                instead of a plain tuple.
+                Whether or not to return a [`~models.consistency_decoder_vae.ConsistencyDecoderVAEOutput`] instead of a
+                plain tuple.
 
         Returns:
-            [`~models.autoencoders.consistency_decoder_vae.ConsistencyDecoderVAEOutput`] or `tuple`:
-                If return_dict is True, a [`~models.autoencoders.consistency_decoder_vae.ConsistencyDecoderVAEOutput`]
-                is returned, otherwise a plain `tuple` is returned.
+            [`~models.consistency_decoder_vae.ConsistencyDecoderVAEOutput`] or `tuple`:
+                If return_dict is True, a [`~models.consistency_decoder_vae.ConsistencyDecoderVAEOutput`] is returned,
+                otherwise a plain `tuple` is returned.
         """
         overlap_size = int(self.tile_sample_min_size * (1 - self.tile_overlap_factor))
         blend_extent = int(self.tile_latent_min_size * self.tile_overlap_factor)
@@ -427,14 +402,14 @@ class ConsistencyDecoderVAE(ModelMixin, ConfigMixin):
 
     def forward(
         self,
-        sample: torch.Tensor,
+        sample: torch.FloatTensor,
         sample_posterior: bool = False,
         return_dict: bool = True,
         generator: Optional[torch.Generator] = None,
-    ) -> Union[DecoderOutput, Tuple[torch.Tensor]]:
+    ) -> Union[DecoderOutput, Tuple[torch.FloatTensor]]:
         r"""
         Args:
-            sample (`torch.Tensor`): Input sample.
+            sample (`torch.FloatTensor`): Input sample.
             sample_posterior (`bool`, *optional*, defaults to `False`):
                 Whether to sample from the posterior.
             return_dict (`bool`, *optional*, defaults to `True`):

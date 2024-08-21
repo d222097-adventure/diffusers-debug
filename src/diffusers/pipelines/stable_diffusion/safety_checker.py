@@ -31,7 +31,6 @@ def cosine_distance(image_embeds, text_embeds):
 
 class StableDiffusionSafetyChecker(PreTrainedModel):
     config_class = CLIPConfig
-    main_input_name = "clip_input"
 
     _no_split_modules = ["CLIPEncoderLayer"]
 
@@ -100,7 +99,7 @@ class StableDiffusionSafetyChecker(PreTrainedModel):
         return images, has_nsfw_concepts
 
     @torch.no_grad()
-    def forward_onnx(self, clip_input: torch.Tensor, images: torch.Tensor):
+    def forward_onnx(self, clip_input: torch.FloatTensor, images: torch.FloatTensor):
         pooled_output = self.vision_model(clip_input)[1]  # pooled_output
         image_embeds = self.visual_projection(pooled_output)
 

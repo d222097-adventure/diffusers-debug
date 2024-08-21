@@ -7,11 +7,12 @@ from typing import Any, Callable, Dict, List, Optional, Union
 import torch
 from transformers import CLIPImageProcessor, T5EncoderModel, T5Tokenizer
 
-from ...loaders import StableDiffusionLoraLoaderMixin
+from ...loaders import LoraLoaderMixin
 from ...models import UNet2DConditionModel
 from ...schedulers import DDPMScheduler
 from ...utils import (
     BACKENDS_MAPPING,
+    is_accelerate_available,
     is_bs4_available,
     is_ftfy_available,
     logging,
@@ -84,7 +85,7 @@ EXAMPLE_DOC_STRING = """
 """
 
 
-class IFPipeline(DiffusionPipeline, StableDiffusionLoraLoaderMixin):
+class IFPipeline(DiffusionPipeline, LoraLoaderMixin):
     tokenizer: T5Tokenizer
     text_encoder: T5EncoderModel
 
@@ -114,7 +115,6 @@ class IFPipeline(DiffusionPipeline, StableDiffusionLoraLoaderMixin):
 
     _optional_components = ["tokenizer", "text_encoder", "safety_checker", "feature_extractor", "watermarker"]
     model_cpu_offload_seq = "text_encoder->unet"
-    _exclude_from_cpu_offload = ["watermarker"]
 
     def __init__(
         self,
@@ -156,6 +156,20 @@ class IFPipeline(DiffusionPipeline, StableDiffusionLoraLoaderMixin):
         )
         self.register_to_config(requires_safety_checker=requires_safety_checker)
 
+    def remove_all_hooks(self):
+        if is_accelerate_available():
+            from accelerate.hooks import remove_hook_from_module
+        else:
+            raise ImportError("Please install accelerate via `pip install accelerate`")
+
+        for model in [self.text_encoder, self.unet, self.safety_checker]:
+            if model is not None:
+                remove_hook_from_module(model, recurse=True)
+
+        self.unet_offload_hook = None
+        self.text_encoder_offload_hook = None
+        self.final_offload_hook = None
+
     @torch.no_grad()
     def encode_prompt(
         self,
@@ -164,8 +178,8 @@ class IFPipeline(DiffusionPipeline, StableDiffusionLoraLoaderMixin):
         num_images_per_prompt: int = 1,
         device: Optional[torch.device] = None,
         negative_prompt: Optional[Union[str, List[str]]] = None,
-        prompt_embeds: Optional[torch.Tensor] = None,
-        negative_prompt_embeds: Optional[torch.Tensor] = None,
+        prompt_embeds: Optional[torch.FloatTensor] = None,
+        negative_prompt_embeds: Optional[torch.FloatTensor] = None,
         clean_caption: bool = False,
     ):
         r"""
@@ -184,10 +198,10 @@ class IFPipeline(DiffusionPipeline, StableDiffusionLoraLoaderMixin):
                 The prompt or prompts not to guide the image generation. If not defined, one has to pass
                 `negative_prompt_embeds`. instead. If not defined, one has to pass `negative_prompt_embeds`. instead.
                 Ignored when not using guidance (i.e., ignored if `guidance_scale` is less than `1`).
-            prompt_embeds (`torch.Tensor`, *optional*):
+            prompt_embeds (`torch.FloatTensor`, *optional*):
                 Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
                 provided, text embeddings will be generated from `prompt` input argument.
-            negative_prompt_embeds (`torch.Tensor`, *optional*):
+            negative_prompt_embeds (`torch.FloatTensor`, *optional*):
                 Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
                 weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
                 argument.
@@ -321,6 +335,9 @@ class IFPipeline(DiffusionPipeline, StableDiffusionLoraLoaderMixin):
             nsfw_detected = None
             watermark_detected = None
 
+            if hasattr(self, "unet_offload_hook") and self.unet_offload_hook is not None:
+                self.unet_offload_hook.offload()
+
         return image, nsfw_detected, watermark_detected
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_extra_step_kwargs
@@ -399,13 +416,13 @@ class IFPipeline(DiffusionPipeline, StableDiffusionLoraLoaderMixin):
 
     def _text_preprocessing(self, text, clean_caption=False):
         if clean_caption and not is_bs4_available():
-            logger.warning(BACKENDS_MAPPING["bs4"][-1].format("Setting `clean_caption=True`"))
-            logger.warning("Setting `clean_caption` to False...")
+            logger.warn(BACKENDS_MAPPING["bs4"][-1].format("Setting `clean_caption=True`"))
+            logger.warn("Setting `clean_caption` to False...")
             clean_caption = False
 
         if clean_caption and not is_ftfy_available():
-            logger.warning(BACKENDS_MAPPING["ftfy"][-1].format("Setting `clean_caption=True`"))
-            logger.warning("Setting `clean_caption` to False...")
+            logger.warn(BACKENDS_MAPPING["ftfy"][-1].format("Setting `clean_caption=True`"))
+            logger.warn("Setting `clean_caption` to False...")
             clean_caption = False
 
         if not isinstance(text, (tuple, list)):
@@ -549,11 +566,11 @@ class IFPipeline(DiffusionPipeline, StableDiffusionLoraLoaderMixin):
         width: Optional[int] = None,
         eta: float = 0.0,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-        prompt_embeds: Optional[torch.Tensor] = None,
-        negative_prompt_embeds: Optional[torch.Tensor] = None,
+        prompt_embeds: Optional[torch.FloatTensor] = None,
+        negative_prompt_embeds: Optional[torch.FloatTensor] = None,
         output_type: Optional[str] = "pil",
         return_dict: bool = True,
-        callback: Optional[Callable[[int, int, torch.Tensor], None]] = None,
+        callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
         callback_steps: int = 1,
         clean_caption: bool = True,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
@@ -593,10 +610,10 @@ class IFPipeline(DiffusionPipeline, StableDiffusionLoraLoaderMixin):
             generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
                 One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
                 to make generation deterministic.
-            prompt_embeds (`torch.Tensor`, *optional*):
+            prompt_embeds (`torch.FloatTensor`, *optional*):
                 Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
                 provided, text embeddings will be generated from `prompt` input argument.
-            negative_prompt_embeds (`torch.Tensor`, *optional*):
+            negative_prompt_embeds (`torch.FloatTensor`, *optional*):
                 Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
                 weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
                 argument.
@@ -607,7 +624,7 @@ class IFPipeline(DiffusionPipeline, StableDiffusionLoraLoaderMixin):
                 Whether or not to return a [`~pipelines.stable_diffusion.IFPipelineOutput`] instead of a plain tuple.
             callback (`Callable`, *optional*):
                 A function that will be called every `callback_steps` steps during inference. The function will be
-                called with the following arguments: `callback(step: int, timestep: int, latents: torch.Tensor)`.
+                called with the following arguments: `callback(step: int, timestep: int, latents: torch.FloatTensor)`.
             callback_steps (`int`, *optional*, defaults to 1):
                 The frequency at which the `callback` function will be called. If not specified, the callback will be
                 called at every step.
@@ -673,9 +690,6 @@ class IFPipeline(DiffusionPipeline, StableDiffusionLoraLoaderMixin):
         else:
             self.scheduler.set_timesteps(num_inference_steps, device=device)
             timesteps = self.scheduler.timesteps
-
-        if hasattr(self.scheduler, "set_begin_index"):
-            self.scheduler.set_begin_index(0)
 
         # 5. Prepare intermediate images
         intermediate_images = self.prepare_intermediate_images(

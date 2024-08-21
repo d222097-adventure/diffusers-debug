@@ -10,12 +10,13 @@ import torch
 import torch.nn.functional as F
 from transformers import CLIPImageProcessor, T5EncoderModel, T5Tokenizer
 
-from ...loaders import StableDiffusionLoraLoaderMixin
+from ...loaders import LoraLoaderMixin
 from ...models import UNet2DConditionModel
 from ...schedulers import DDPMScheduler
 from ...utils import (
     BACKENDS_MAPPING,
     PIL_INTERPOLATION,
+    is_accelerate_available,
     is_bs4_available,
     is_ftfy_available,
     logging,
@@ -113,7 +114,7 @@ EXAMPLE_DOC_STRING = """
     """
 
 
-class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLoraLoaderMixin):
+class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, LoraLoaderMixin):
     tokenizer: T5Tokenizer
     text_encoder: T5EncoderModel
 
@@ -144,7 +145,6 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
 
     model_cpu_offload_seq = "text_encoder->unet"
     _optional_components = ["tokenizer", "text_encoder", "safety_checker", "feature_extractor", "watermarker"]
-    _exclude_from_cpu_offload = ["watermarker"]
 
     def __init__(
         self,
@@ -177,7 +177,7 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
             )
 
         if unet.config.in_channels != 6:
-            logger.warning(
+            logger.warn(
                 "It seems like you have loaded a checkpoint that shall not be used for super resolution from {unet.config._name_or_path} as it accepts {unet.config.in_channels} input channels instead of 6. Please make sure to pass a super resolution checkpoint as the `'unet'`: IFSuperResolutionPipeline.from_pretrained(unet=super_resolution_unet, ...)`."
             )
 
@@ -193,16 +193,31 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
         )
         self.register_to_config(requires_safety_checker=requires_safety_checker)
 
+    # Copied from diffusers.pipelines.deepfloyd_if.pipeline_if.IFPipeline.remove_all_hooks
+    def remove_all_hooks(self):
+        if is_accelerate_available():
+            from accelerate.hooks import remove_hook_from_module
+        else:
+            raise ImportError("Please install accelerate via `pip install accelerate`")
+
+        for model in [self.text_encoder, self.unet, self.safety_checker]:
+            if model is not None:
+                remove_hook_from_module(model, recurse=True)
+
+        self.unet_offload_hook = None
+        self.text_encoder_offload_hook = None
+        self.final_offload_hook = None
+
     # Copied from diffusers.pipelines.deepfloyd_if.pipeline_if.IFPipeline._text_preprocessing
     def _text_preprocessing(self, text, clean_caption=False):
         if clean_caption and not is_bs4_available():
-            logger.warning(BACKENDS_MAPPING["bs4"][-1].format("Setting `clean_caption=True`"))
-            logger.warning("Setting `clean_caption` to False...")
+            logger.warn(BACKENDS_MAPPING["bs4"][-1].format("Setting `clean_caption=True`"))
+            logger.warn("Setting `clean_caption` to False...")
             clean_caption = False
 
         if clean_caption and not is_ftfy_available():
-            logger.warning(BACKENDS_MAPPING["ftfy"][-1].format("Setting `clean_caption=True`"))
-            logger.warning("Setting `clean_caption` to False...")
+            logger.warn(BACKENDS_MAPPING["ftfy"][-1].format("Setting `clean_caption=True`"))
+            logger.warn("Setting `clean_caption` to False...")
             clean_caption = False
 
         if not isinstance(text, (tuple, list)):
@@ -342,8 +357,8 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
         num_images_per_prompt: int = 1,
         device: Optional[torch.device] = None,
         negative_prompt: Optional[Union[str, List[str]]] = None,
-        prompt_embeds: Optional[torch.Tensor] = None,
-        negative_prompt_embeds: Optional[torch.Tensor] = None,
+        prompt_embeds: Optional[torch.FloatTensor] = None,
+        negative_prompt_embeds: Optional[torch.FloatTensor] = None,
         clean_caption: bool = False,
     ):
         r"""
@@ -362,10 +377,10 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
                 The prompt or prompts not to guide the image generation. If not defined, one has to pass
                 `negative_prompt_embeds`. instead. If not defined, one has to pass `negative_prompt_embeds`. instead.
                 Ignored when not using guidance (i.e., ignored if `guidance_scale` is less than `1`).
-            prompt_embeds (`torch.Tensor`, *optional*):
+            prompt_embeds (`torch.FloatTensor`, *optional*):
                 Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
                 provided, text embeddings will be generated from `prompt` input argument.
-            negative_prompt_embeds (`torch.Tensor`, *optional*):
+            negative_prompt_embeds (`torch.FloatTensor`, *optional*):
                 Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
                 weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
                 argument.
@@ -500,6 +515,9 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
             nsfw_detected = None
             watermark_detected = None
 
+            if hasattr(self, "unet_offload_hook") and self.unet_offload_hook is not None:
+                self.unet_offload_hook.offload()
+
         return image, nsfw_detected, watermark_detected
 
     # Copied from diffusers.pipelines.deepfloyd_if.pipeline_if.IFPipeline.prepare_extra_step_kwargs
@@ -579,7 +597,7 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
             and not isinstance(check_image_type, np.ndarray)
         ):
             raise ValueError(
-                "`image` has to be of type `torch.Tensor`, `PIL.Image.Image`, `np.ndarray`, or List[...] but is"
+                "`image` has to be of type `torch.FloatTensor`, `PIL.Image.Image`, `np.ndarray`, or List[...] but is"
                 f" {type(check_image_type)}"
             )
 
@@ -610,7 +628,7 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
             and not isinstance(check_image_type, np.ndarray)
         ):
             raise ValueError(
-                "`original_image` has to be of type `torch.Tensor`, `PIL.Image.Image`, `np.ndarray`, or List[...] but is"
+                "`original_image` has to be of type `torch.FloatTensor`, `PIL.Image.Image`, `np.ndarray`, or List[...] but is"
                 f" {type(check_image_type)}"
             )
 
@@ -643,7 +661,7 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
             and not isinstance(check_image_type, np.ndarray)
         ):
             raise ValueError(
-                "`mask_image` has to be of type `torch.Tensor`, `PIL.Image.Image`, `np.ndarray`, or List[...] but is"
+                "`mask_image` has to be of type `torch.FloatTensor`, `PIL.Image.Image`, `np.ndarray`, or List[...] but is"
                 f" {type(check_image_type)}"
             )
 
@@ -680,7 +698,7 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
 
             for image_ in image:
                 image_ = image_.convert("RGB")
-                image_ = resize(image_, self.unet.config.sample_size)
+                image_ = resize(image_, self.unet.sample_size)
                 image_ = np.array(image_)
                 image_ = image_.astype(np.float32)
                 image_ = image_ / 127.5 - 1
@@ -760,7 +778,7 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
 
             for mask_image_ in mask_image:
                 mask_image_ = mask_image_.convert("L")
-                mask_image_ = resize(mask_image_, self.unet.config.sample_size)
+                mask_image_ = resize(mask_image_, self.unet.sample_size)
                 mask_image_ = np.array(mask_image_)
                 mask_image_ = mask_image_[None, None, :]
                 new_mask_image.append(mask_image_)
@@ -782,15 +800,13 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
 
         return mask_image
 
-    # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img.StableDiffusionImg2ImgPipeline.get_timesteps
+    # Copied from diffusers.pipelines.deepfloyd_if.pipeline_if_img2img.IFImg2ImgPipeline.get_timesteps
     def get_timesteps(self, num_inference_steps, strength):
         # get the original timestep using init_timestep
         init_timestep = min(int(num_inference_steps * strength), num_inference_steps)
 
         t_start = max(num_inference_steps - init_timestep, 0)
-        timesteps = self.scheduler.timesteps[t_start * self.scheduler.order :]
-        if hasattr(self.scheduler, "set_begin_index"):
-            self.scheduler.set_begin_index(t_start * self.scheduler.order)
+        timesteps = self.scheduler.timesteps[t_start:]
 
         return timesteps, num_inference_steps - t_start
 
@@ -823,7 +839,7 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
         self,
-        image: Union[PIL.Image.Image, np.ndarray, torch.Tensor],
+        image: Union[PIL.Image.Image, np.ndarray, torch.FloatTensor],
         original_image: Union[
             PIL.Image.Image, torch.Tensor, np.ndarray, List[PIL.Image.Image], List[torch.Tensor], List[np.ndarray]
         ] = None,
@@ -839,11 +855,11 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
         num_images_per_prompt: Optional[int] = 1,
         eta: float = 0.0,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-        prompt_embeds: Optional[torch.Tensor] = None,
-        negative_prompt_embeds: Optional[torch.Tensor] = None,
+        prompt_embeds: Optional[torch.FloatTensor] = None,
+        negative_prompt_embeds: Optional[torch.FloatTensor] = None,
         output_type: Optional[str] = "pil",
         return_dict: bool = True,
-        callback: Optional[Callable[[int, int, torch.Tensor], None]] = None,
+        callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
         callback_steps: int = 1,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         noise_level: int = 0,
@@ -853,10 +869,10 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
         Function invoked when calling the pipeline for generation.
 
         Args:
-            image (`torch.Tensor` or `PIL.Image.Image`):
+            image (`torch.FloatTensor` or `PIL.Image.Image`):
                 `Image`, or tensor representing an image batch, that will be used as the starting point for the
                 process.
-            original_image (`torch.Tensor` or `PIL.Image.Image`):
+            original_image (`torch.FloatTensor` or `PIL.Image.Image`):
                 The original image that `image` was varied from.
             mask_image (`PIL.Image.Image`):
                 `Image`, or tensor representing an image batch, to mask `image`. White pixels in the mask will be
@@ -896,10 +912,10 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
             generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
                 One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
                 to make generation deterministic.
-            prompt_embeds (`torch.Tensor`, *optional*):
+            prompt_embeds (`torch.FloatTensor`, *optional*):
                 Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
                 provided, text embeddings will be generated from `prompt` input argument.
-            negative_prompt_embeds (`torch.Tensor`, *optional*):
+            negative_prompt_embeds (`torch.FloatTensor`, *optional*):
                 Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
                 weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
                 argument.
@@ -910,7 +926,7 @@ class IFInpaintingSuperResolutionPipeline(DiffusionPipeline, StableDiffusionLora
                 Whether or not to return a [`~pipelines.stable_diffusion.IFPipelineOutput`] instead of a plain tuple.
             callback (`Callable`, *optional*):
                 A function that will be called every `callback_steps` steps during inference. The function will be
-                called with the following arguments: `callback(step: int, timestep: int, latents: torch.Tensor)`.
+                called with the following arguments: `callback(step: int, timestep: int, latents: torch.FloatTensor)`.
             callback_steps (`int`, *optional*, defaults to 1):
                 The frequency at which the `callback` function will be called. If not specified, the callback will be
                 called at every step.
